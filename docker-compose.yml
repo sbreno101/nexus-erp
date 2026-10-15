@@ -1,0 +1,99 @@
+# =====================================================================
+# Nexus ERP — ambiente de desenvolvimento
+# ---------------------------------------------------------------------
+# Modo híbrido (padrão): sobe apenas a infraestrutura (PostgreSQL, Redis
+# e Mailpit) e você executa o PHP localmente (php artisan serve).
+#     docker compose up -d
+#
+# Modo completo (perfil "app"): também executa a aplicação, o worker de
+# filas e o scheduler dentro de containers.
+#     docker compose --profile app up -d --build
+# =====================================================================
+services:
+  pgsql:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-nexus_erp}
+      POSTGRES_USER: ${DB_USERNAME:-nexus}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-nexus_local_dev}
+    ports:
+      - "${FORWARD_DB_PORT:-5433}:5432"
+    volumes:
+      - nexus-pgsql:/var/lib/postgresql/data
+      - ./docker/pgsql/create-testing-database.sql:/docker-entrypoint-initdb.d/10-create-testing-database.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-nexus} -d ${DB_DATABASE:-nexus_erp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${FORWARD_REDIS_PORT:-6379}:6379"
+    volumes:
+      - nexus-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "${FORWARD_MAILPIT_PORT:-1025}:1025"
+      - "${FORWARD_MAILPIT_DASHBOARD_PORT:-8025}:8025"
+
+  app:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    image: nexus-erp-app
+    command: php artisan serve --host=0.0.0.0 --port=8000
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file: .env
+    environment: &container-env
+      DB_HOST: pgsql
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  queue:
+    profiles: ["app"]
+    image: nexus-erp-app
+    command: php artisan queue:work --tries=3 --backoff=10
+    env_file: .env
+    environment: *container-env
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - app
+
+  scheduler:
+    profiles: ["app"]
+    image: nexus-erp-app
+    command: php artisan schedule:work
+    env_file: .env
+    environment: *container-env
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - app
+
+volumes:
+  nexus-pgsql:
+  nexus-redis:

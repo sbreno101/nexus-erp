@@ -1,0 +1,10 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    paths:
+        - app
+    # Nível 1: classes, métodos, funções e variáveis inexistentes (erros reais).
+    # Veja docs/12-roadmap.md para o plano de subir o nível gradualmente.
+    level: 1
+    tmpDir: storage/framework/cache/phpstan
